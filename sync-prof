@@ -1,0 +1,98 @@
+#!/usr/bin/env python
+"""
+Synchronization profiler driver script, which handles command line arguments
+and envokes a synchronization event collector (e.g. GDB).
+"""
+
+
+import argparse
+import subprocess
+import os
+import logging
+
+import sp_util
+
+
+def main():
+    'module entry: process command line and run GDB'
+    args, logLevel = processCommandLine()
+    runGDB(args.program,
+           args.args,
+           args.command,
+           args.config,
+           args.output,
+           args.debug,
+           args.output_format,
+           logLevel)
+
+
+def processCommandLine():
+    'Process the command line arguments'
+    description = 'Capture synchronization events in machine code and ' + \
+        'present them on a timeline'
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('program', metavar='PROGRAM', nargs=1,
+                        help='program to profile')
+    parser.add_argument('args', metavar='ARGUMENT', nargs='*',
+                        help='command line arguments for the program')
+    parser.add_argument('-d', '--debug', default=False, action='store_true',
+                        help='debug mode, printing stderr from debugger')
+    parser.add_argument('-c', '--command', default=None,
+                        help='user-defined command to sync-profiler')
+    parser.add_argument('-s', '--config', default='sp.conf',
+                        help='config file listing breakpoints')
+    parser.add_argument('-o', '--output', metavar='FILE', default='sp.txt',
+                        help='output file, default is "sp.txt"')
+    parser.add_argument('-f', '--output-format', metavar='[text|chrome]', default='text',
+                        help='output file format. Default is "text". ' + \
+                            '"chrome" is the JSON format for the built-in ' + \
+                            'Chrome trace viewer [TODO]')
+    parser.add_argument('-t', '--timing', default=False, action='store_true',
+                        help='display time between sync events [TODO]')
+    parser.add_argument('-a', '--attach', metavar='PID',
+                        help='attach to and profile a running process with PID [TODO]')
+    parser.add_argument('--debugger', metavar='[gdb|lldb]',
+                        help='specify debugger to use for sync profiling [TODO]')
+    args = parser.parse_args()
+    # setup logging
+    if args.debug:
+        logLevel = logging.DEBUG
+    else:
+        logLevel = logging.WARNING
+    log = sp_util.setupLogging(logLevel)
+    # check program to be analyzed exists
+    prog = args.program[0]
+    if not os.path.exists(prog):
+        log.error('Program %s does not exist' % prog)
+        parser.print_help()
+        exit(1)
+    return args, log
+
+
+def runGDB(program, programArgs, userCommand, config, outputFile, debug, outFormat, log):
+    'execute program with programArgs in gdb'
+    logLevel = log.getEffectiveLevel()
+    quietOptions = [] if debug else ['--quiet', '--batch-silent']
+    spDirName = os.path.dirname(os.path.realpath(__file__))
+    gdbScript = os.path.join(spDirName, 'sp_gdb_ctrl.py')
+    if not os.path.exists(config):
+        config = os.path.join(spDirName, config)
+        assert os.path.exists(config)
+    cmd = ['gdb'] + \
+          quietOptions + \
+          ['--eval-command=print "%s"' % config,
+           '--eval-command=print "%s"' % outputFile,
+           '--eval-command=print "%s"' % userCommand,
+           '--eval-command=print "%s"' % debug,
+           '--eval-command=print "%s"' % outFormat,
+           '--eval-command=print "%s"' % spDirName,
+           '--eval-command=print "%s"' % logLevel,
+           '--command', gdbScript, '--args'] + program + programArgs
+    log.info('spawning GDB: %s' % cmd)
+    proc = subprocess.Popen(cmd)
+    assert proc.wait() == 0
+    log.info('GDB finished')
+
+
+if __name__ == '__main__':
+    main()
